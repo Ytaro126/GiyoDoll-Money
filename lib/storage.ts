@@ -1,4 +1,4 @@
-import { AppData, AppSettings, Transaction, Budget } from '@/types';
+import { AppData, AppSettings, Transaction, Budget, DEFAULT_EXPENSE_CATEGORIES, DEFAULT_INCOME_CATEGORIES } from '@/types';
 
 const STORAGE_KEY = 'giyodoll_money_data';
 
@@ -6,6 +6,11 @@ const defaultSettings: AppSettings = {
   user1Name: 'ユーザー1',
   user2Name: 'ユーザー2',
   currency: '¥',
+  user1Icon: null,
+  user2Icon: null,
+  giyodollIcon: null,
+  expenseCategories: DEFAULT_EXPENSE_CATEGORIES,
+  incomeCategories: DEFAULT_INCOME_CATEGORIES,
 };
 
 const defaultData: AppData = {

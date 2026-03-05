@@ -21,6 +21,11 @@ export default function RoomEntry() {
   const [isLoading, setIsLoading] = useState(false);
   const [createdCode, setCreatedCode] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [failCount, setFailCount] = useState(0);
+  const [lockedUntil, setLockedUntil] = useState<number | null>(null);
+
+  const MAX_ATTEMPTS = 5;
+  const LOCKOUT_SECONDS = 60;
 
   // ルームコードを XXXX-XXXX 形式に整形
   const handleCodeChange = (value: string) => {
@@ -35,6 +40,11 @@ export default function RoomEntry() {
   };
 
   const handleJoin = async () => {
+    if (lockedUntil && Date.now() < lockedUntil) {
+      const remaining = Math.ceil((lockedUntil - Date.now()) / 1000);
+      setError(`試行回数が多すぎます。${remaining}秒後に再試行してください`);
+      return;
+    }
     if (!roomCode.trim() || !username.trim() || !password.trim()) {
       setError('すべての項目を入力してください');
       return;
@@ -43,7 +53,18 @@ export default function RoomEntry() {
     setError('');
     const result = await joinRoom(roomCode, username, password);
     if (!result.success) {
-      setError(result.error ?? 'エラーが発生しました');
+      const next = failCount + 1;
+      setFailCount(next);
+      if (next >= MAX_ATTEMPTS) {
+        setLockedUntil(Date.now() + LOCKOUT_SECONDS * 1000);
+        setFailCount(0);
+        setError(`${MAX_ATTEMPTS}回失敗しました。${LOCKOUT_SECONDS}秒間ロックされます`);
+      } else {
+        setError(result.error ?? 'エラーが発生しました');
+      }
+    } else {
+      setFailCount(0);
+      setLockedUntil(null);
     }
     setIsLoading(false);
   };

@@ -1,13 +1,18 @@
 'use client';
 
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
-import { AppData, Transaction, Budget, AppSettings } from '@/types';
-import { supabase } from './supabase';
+import {
+  AppData, Transaction, Budget, AppSettings,
+  CustomCategory, DEFAULT_EXPENSE_CATEGORIES, DEFAULT_INCOME_CATEGORIES,
+  TransactionType,
+} from '@/types';
+import { supabase, uploadAvatar } from './supabase';
 import {
   getRoomId, setRoomId, clearRoomId,
   getMyUser, setMyUser, clearMyUser,
   generateRoomCode,
 } from './room';
+import { hashPassword } from './crypto';
 
 // formatCurrency はそのまま維持
 export function formatCurrency(amount: number, currency = '¥'): string {
@@ -27,6 +32,11 @@ const DEFAULT_SETTINGS: AppSettings = {
   user1Name: 'ユーザー1',
   user2Name: 'ユーザー2',
   currency: '¥',
+  user1Icon: null,
+  user2Icon: null,
+  giyodollIcon: null,
+  expenseCategories: DEFAULT_EXPENSE_CATEGORIES,
+  incomeCategories: DEFAULT_INCOME_CATEGORIES,
 };
 
 const DEFAULT_DATA: AppData = {
@@ -48,6 +58,8 @@ interface AppContextValue {
   deleteTx: (id: string) => Promise<void>;
   upsertBudgetEntry: (budget: Omit<Budget, 'id'> & { id?: string }) => Promise<void>;
   updateAppSettings: (settings: Partial<AppSettings>) => Promise<void>;
+  uploadIcon: (userType: 'user1' | 'user2' | 'giyodoll', file: File) => Promise<void>;
+  updateCategories: (type: 'income' | 'expense', categories: CustomCategory[]) => Promise<void>;
   clearAllData: () => Promise<void>;
   refresh: () => void;
 }
@@ -74,8 +86,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       date: row.date as string,
       category: row.category as string,
       description: (row.description as string) ?? '',
-      user: row.user_type as 'user1' | 'user2',
+      user: row.user_type as 'user1' | 'user2' | 'giyodoll',
       amount: Number(row.amount),
+      type: (row.type as TransactionType) ?? 'expense',
     }));
 
     const budgets: Budget[] = (budgetRes.data ?? []).map((row: Record<string, unknown>) => ({
@@ -91,6 +104,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           user1Name: settingsRes.data.user1_name as string,
           user2Name: settingsRes.data.user2_name as string,
           currency: settingsRes.data.currency as string,
+          user1Icon: (settingsRes.data.user1_icon as string | null) ?? null,
+          user2Icon: (settingsRes.data.user2_icon as string | null) ?? null,
+          giyodollIcon: (settingsRes.data.giyodoll_icon as string | null) ?? null,
+          expenseCategories: (settingsRes.data.expense_categories as CustomCategory[] | null) ?? DEFAULT_EXPENSE_CATEGORIES,
+          incomeCategories: (settingsRes.data.income_categories as CustomCategory[] | null) ?? DEFAULT_INCOME_CATEGORIES,
         }
       : DEFAULT_SETTINGS;
 
@@ -130,14 +148,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const storedRoom = getRoomId();
     const storedUser = getMyUser();
-    // 両方そろっている場合のみ復元 (片方だけの場合はログイン画面へ)
     if (storedRoom && storedUser) {
       setRoomIdState(storedRoom);
       setMyUserState(storedUser);
       fetchData(storedRoom).finally(() => setLoading(false));
       subscribe(storedRoom);
     } else {
-      // 不整合があれば両方クリア
       clearRoomId();
       clearMyUser();
       setLoading(false);
@@ -162,30 +178,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (error) return { success: false, error: 'エラーが発生しました' };
     if (!settings) return { success: false, error: 'ルームが見つかりません。コードを確認してください' };
 
+    const hashed = await hashPassword(password);
     let loggedInAs: 'user1' | 'user2' | null = null;
 
-    // user1の認証チェック
-    if (settings.user1_username === username && settings.user1_password === password) {
+    if (settings.user1_username === username && settings.user1_password === hashed) {
       loggedInAs = 'user1';
-    }
-    // user2の認証チェック
-    else if (settings.user2_username && settings.user2_username === username && settings.user2_password === password) {
+    } else if (settings.user2_username && settings.user2_username === username && settings.user2_password === hashed) {
       loggedInAs = 'user2';
-    }
-    // user2がまだ未登録 → 新規user2として登録
-    else if (!settings.user2_username) {
+    } else if (!settings.user2_username) {
       const { error: updateErr } = await supabase
         .from('room_settings')
         .update({
           user2_username: username,
-          user2_password: password,
+          user2_password: hashed,
           user2_name: username,
         })
         .eq('room_id', normalized);
       if (updateErr) return { success: false, error: 'ユーザー登録に失敗しました' };
       loggedInAs = 'user2';
-    }
-    else {
+    } else {
       return { success: false, error: 'ユーザー名またはパスワードが違います' };
     }
 
@@ -202,13 +213,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // 新しいルームを作成 (user1として登録)
   const createRoom = async (username: string, password: string): Promise<string> => {
     const code = generateRoomCode();
+    const hashed = await hashPassword(password);
     await supabase.from('room_settings').insert({
       room_id: code,
       user1_name: username,
       user2_name: 'ユーザー2',
       currency: '¥',
       user1_username: username,
-      user1_password: password,
+      user1_password: hashed,
     });
     setRoomId(code);
     setRoomIdState(code);
@@ -229,9 +241,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setData(DEFAULT_DATA);
   };
 
+  // 入力バリデーション
+  const validateTx = (tx: Omit<Transaction, 'id'>): boolean => {
+    if (!tx.amount || tx.amount <= 0 || tx.amount > 100_000_000) return false;
+    if (!tx.date || !/^\d{4}-\d{2}-\d{2}$/.test(tx.date)) return false;
+    if (tx.type !== 'income' && tx.type !== 'expense') return false;
+    const cats = tx.type === 'income'
+      ? data.settings.incomeCategories
+      : data.settings.expenseCategories;
+    if (!cats.some((c) => c.name === tx.category)) return false;
+    if (tx.user !== 'user1' && tx.user !== 'user2' && tx.user !== 'giyodoll') return false;
+    if (tx.description.length > 200) return false;
+    return true;
+  };
+
   // 取引を追加 (楽観的更新)
   const addTx = async (tx: Omit<Transaction, 'id'>) => {
     if (!roomId) return;
+    if (!validateTx(tx)) return;
     const id = generateId();
     const newTx: Transaction = { ...tx, id };
     setData((prev) => ({ ...prev, transactions: [...prev.transactions, newTx] }));
@@ -243,12 +270,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       description: tx.description,
       user_type: tx.user,
       amount: tx.amount,
+      type: tx.type,
     });
   };
 
   // 取引を更新 (楽観的更新)
   const updateTx = async (id: string, tx: Partial<Transaction>) => {
     if (!roomId) return;
+    if (tx.amount !== undefined && (tx.amount <= 0 || tx.amount > 100_000_000)) return;
+    if (tx.user !== undefined && tx.user !== 'user1' && tx.user !== 'user2' && tx.user !== 'giyodoll') return;
+    if (tx.description !== undefined && tx.description.length > 200) return;
     setData((prev) => ({
       ...prev,
       transactions: prev.transactions.map((t) => (t.id === id ? { ...t, ...tx } : t)),
@@ -259,6 +290,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (tx.description !== undefined) updates.description = tx.description;
     if (tx.user !== undefined) updates.user_type = tx.user;
     if (tx.amount !== undefined) updates.amount = tx.amount;
+    if (tx.type !== undefined) updates.type = tx.type;
     await supabase.from('transactions').update(updates).eq('id', id).eq('room_id', roomId);
   };
 
@@ -312,21 +344,52 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  // 設定を更新 (楽観的更新)
+  // 設定を更新 (楽観的更新) - 名前・通貨のみ
   const updateAppSettings = async (settings: Partial<AppSettings>) => {
     if (!roomId) return;
     const newSettings = { ...data.settings, ...settings };
     setData((prev) => ({ ...prev, settings: newSettings }));
-    await supabase.from('room_settings').update({
-      user1_name: newSettings.user1Name,
-      user2_name: newSettings.user2Name,
-      currency: newSettings.currency,
-    }).eq('room_id', roomId);
+    const update: Record<string, unknown> = {};
+    if (settings.user1Name !== undefined) update.user1_name = settings.user1Name;
+    if (settings.user2Name !== undefined) update.user2_name = settings.user2Name;
+    if (settings.currency !== undefined) update.currency = settings.currency;
+    if (Object.keys(update).length > 0) {
+      await supabase.from('room_settings').update(update).eq('room_id', roomId);
+    }
   };
 
-  // 全データ削除
+  // アイコン画像をアップロードして room_settings に保存
+  const uploadIcon = async (userType: 'user1' | 'user2' | 'giyodoll', file: File): Promise<void> => {
+    if (!roomId) return;
+    const url = await uploadAvatar(roomId, userType, file);
+    const col = `${userType}_icon`; // user1_icon / user2_icon / giyodoll_icon
+    await supabase.from('room_settings').update({ [col]: url }).eq('room_id', roomId);
+    const key = `${userType}Icon` as 'user1Icon' | 'user2Icon' | 'giyodollIcon';
+    setData((prev) => ({
+      ...prev,
+      settings: { ...prev.settings, [key]: url },
+    }));
+  };
+
+  // カスタムカテゴリを更新
+  const updateCategories = async (type: 'income' | 'expense', categories: CustomCategory[]): Promise<void> => {
+    if (!roomId) return;
+    const col = type === 'expense' ? 'expense_categories' : 'income_categories';
+    const key = type === 'expense' ? 'expenseCategories' : 'incomeCategories';
+    await supabase.from('room_settings').update({ [col]: categories }).eq('room_id', roomId);
+    setData((prev) => ({
+      ...prev,
+      settings: { ...prev.settings, [key]: categories },
+    }));
+  };
+
+  // 全データ削除 (user1のみ許可)
   const clearAllData = async () => {
     if (!roomId) return;
+    if (myUser !== 'user1') {
+      console.warn('clearAllData: user1 only');
+      return;
+    }
     setData((prev) => ({ ...prev, transactions: [], budgets: [] }));
     await Promise.all([
       supabase.from('transactions').delete().eq('room_id', roomId),
@@ -334,7 +397,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     ]);
   };
 
-  // 後方互換 (settings pageで使用していたが、リアルタイムで不要)
   const refresh = () => {
     if (roomId) fetchData(roomId);
   };
@@ -354,6 +416,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         deleteTx,
         upsertBudgetEntry,
         updateAppSettings,
+        uploadIcon,
+        updateCategories,
         clearAllData,
         refresh,
       }}

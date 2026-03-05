@@ -3,8 +3,8 @@
 import { useState, useMemo } from 'react';
 import { Plus, Search, Trash2, Pencil, ChevronDown } from 'lucide-react';
 import { useApp } from '@/lib/context';
-import { formatCurrency } from '@/lib/storage';
-import { CATEGORIES, CATEGORY_COLORS, Transaction } from '@/types';
+import { formatCurrency } from '@/lib/context';
+import { Transaction } from '@/types';
 import TransactionForm from '@/components/TransactionForm';
 
 export default function TransactionsPage() {
@@ -12,13 +12,19 @@ export default function TransactionsPage() {
   const [showForm, setShowForm] = useState(false);
   const [editingTx, setEditingTx] = useState<Transaction | null>(null);
   const [search, setSearch] = useState('');
-  const [filterUser, setFilterUser] = useState<'all' | 'user1' | 'user2'>('all');
+  const [filterUser, setFilterUser] = useState<'all' | 'user1' | 'user2' | 'giyodoll'>('all');
   const [filterCategory, setFilterCategory] = useState<string>('all');
   const [filterMonth, setFilterMonth] = useState<string>('all');
+  const [filterType, setFilterType] = useState<'all' | 'income' | 'expense'>('all');
 
   const currency = data.settings.currency;
   const u1 = data.settings.user1Name;
   const u2 = data.settings.user2Name;
+
+  const allCategories = useMemo(() => [
+    ...data.settings.expenseCategories,
+    ...data.settings.incomeCategories,
+  ], [data.settings]);
 
   const months = useMemo(() => {
     const set = new Set<string>();
@@ -34,6 +40,7 @@ export default function TransactionsPage() {
       .filter((t) => {
         if (filterUser !== 'all' && t.user !== filterUser) return false;
         if (filterCategory !== 'all' && t.category !== filterCategory) return false;
+        if (filterType !== 'all' && (t.type ?? 'expense') !== filterType) return false;
         if (filterMonth !== 'all') {
           const d = new Date(t.date);
           const m = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -47,14 +54,21 @@ export default function TransactionsPage() {
         return true;
       })
       .sort((a, b) => b.date.localeCompare(a.date));
-  }, [data.transactions, filterUser, filterCategory, filterMonth, search]);
+  }, [data.transactions, filterUser, filterCategory, filterType, filterMonth, search]);
 
-  const total = filtered.reduce((s, t) => s + t.amount, 0);
+  const expenseTotal = filtered.filter((t) => (t.type ?? 'expense') === 'expense').reduce((s, t) => s + t.amount, 0);
+  const incomeTotal = filtered.filter((t) => t.type === 'income').reduce((s, t) => s + t.amount, 0);
 
   const handleDelete = (id: string) => {
     if (confirm('この取引を削除しますか？')) {
       deleteTx(id);
     }
+  };
+
+  const getUserLabel = (tx: Transaction) => {
+    if (tx.user === 'user1') return u1;
+    if (tx.user === 'user2') return u2;
+    return 'GiyoDoll';
   };
 
   return (
@@ -63,7 +77,11 @@ export default function TransactionsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-xl font-bold text-gray-900">取引一覧</h2>
-          <p className="text-sm text-gray-400">{filtered.length}件 · 合計 {formatCurrency(total, currency)}</p>
+          <p className="text-sm text-gray-400">
+            {filtered.length}件
+            {filterType !== 'income' && ` · 支出 ${formatCurrency(expenseTotal, currency)}`}
+            {filterType !== 'expense' && ` · 収入 ${formatCurrency(incomeTotal, currency)}`}
+          </p>
         </div>
         <button
           onClick={() => { setEditingTx(null); setShowForm(true); }}
@@ -86,20 +104,35 @@ export default function TransactionsPage() {
             className="w-full pl-9 pr-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-300 bg-white"
           />
         </div>
-        {/* フィルター: スクロール可能な横並び */}
         <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1" style={{ scrollbarWidth: 'none' }}>
+          {/* 種別フィルター */}
+          <div className="relative flex-shrink-0">
+            <select
+              value={filterType}
+              onChange={(e) => setFilterType(e.target.value as 'all' | 'income' | 'expense')}
+              className="appearance-none border border-gray-200 rounded-xl px-3 py-2.5 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300 pr-8 min-w-[90px]"
+            >
+              <option value="all">全種別</option>
+              <option value="expense">支出</option>
+              <option value="income">収入</option>
+            </select>
+            <ChevronDown size={14} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+          </div>
+          {/* ユーザーフィルター */}
           <div className="relative flex-shrink-0">
             <select
               value={filterUser}
-              onChange={(e) => setFilterUser(e.target.value as 'all' | 'user1' | 'user2')}
+              onChange={(e) => setFilterUser(e.target.value as 'all' | 'user1' | 'user2' | 'giyodoll')}
               className="appearance-none border border-gray-200 rounded-xl px-3 py-2.5 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300 pr-8 min-w-[90px]"
             >
               <option value="all">全員</option>
               <option value="user1">{u1}</option>
               <option value="user2">{u2}</option>
+              <option value="giyodoll">GiyoDoll</option>
             </select>
             <ChevronDown size={14} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
           </div>
+          {/* カテゴリフィルター */}
           <div className="relative flex-shrink-0">
             <select
               value={filterCategory}
@@ -107,12 +140,13 @@ export default function TransactionsPage() {
               className="appearance-none border border-gray-200 rounded-xl px-3 py-2.5 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300 pr-8 min-w-[110px]"
             >
               <option value="all">全カテゴリ</option>
-              {CATEGORIES.map((c) => (
-                <option key={c} value={c}>{c}</option>
+              {allCategories.map((c) => (
+                <option key={c.name} value={c.name}>{c.name}</option>
               ))}
             </select>
             <ChevronDown size={14} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
           </div>
+          {/* 月フィルター */}
           <div className="relative flex-shrink-0">
             <select
               value={filterMonth}
@@ -136,41 +170,52 @@ export default function TransactionsPage() {
             <p className="text-gray-400 text-sm">取引が見つかりません</p>
           </div>
         ) : (
-          filtered.map((tx) => (
-            <div key={tx.id} className="flex items-center gap-3 px-4 py-3.5">
-              <div
-                className="w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-bold flex-shrink-0"
-                style={{ backgroundColor: CATEGORY_COLORS[tx.category] ?? '#6366f1' }}
-              >
-                {tx.category[0]}
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-gray-900 truncate">
-                  {tx.description || tx.category}
-                </p>
-                <p className="text-xs text-gray-400 mt-0.5">
-                  {tx.date} · {tx.category} · {tx.user === 'user1' ? u1 : u2}
-                </p>
-              </div>
-              <p className="text-sm font-bold text-gray-900 flex-shrink-0">
-                {formatCurrency(tx.amount, currency)}
-              </p>
-              <div className="flex gap-0.5 flex-shrink-0 ml-1">
-                <button
-                  onClick={() => { setEditingTx(tx); setShowForm(true); }}
-                  className="w-9 h-9 flex items-center justify-center text-gray-400 active:text-indigo-600 active:bg-indigo-50 rounded-xl transition-colors"
+          filtered.map((tx) => {
+            const catColor = allCategories.find((c) => c.name === tx.category)?.color ?? '#6366f1';
+            const isIncome = tx.type === 'income';
+            return (
+              <div key={tx.id} className="flex items-center gap-3 px-4 py-3.5">
+                <div
+                  className="w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-bold flex-shrink-0"
+                  style={{ backgroundColor: catColor }}
                 >
-                  <Pencil size={15} />
-                </button>
-                <button
-                  onClick={() => handleDelete(tx.id)}
-                  className="w-9 h-9 flex items-center justify-center text-gray-400 active:text-red-600 active:bg-red-50 rounded-xl transition-colors"
-                >
-                  <Trash2 size={15} />
-                </button>
+                  {tx.category[0]}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <p className="text-sm font-semibold text-gray-900 truncate">
+                      {tx.description || tx.category}
+                    </p>
+                    <span className={`flex-shrink-0 text-xs px-1.5 py-0.5 rounded-full font-medium ${
+                      isIncome ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                    }`}>
+                      {isIncome ? '収入' : '支出'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    {tx.date} · {tx.category} · {getUserLabel(tx)}
+                  </p>
+                </div>
+                <p className={`text-sm font-bold flex-shrink-0 ${isIncome ? 'text-green-600' : 'text-gray-900'}`}>
+                  {isIncome ? '+' : ''}{formatCurrency(tx.amount, currency)}
+                </p>
+                <div className="flex gap-0.5 flex-shrink-0 ml-1">
+                  <button
+                    onClick={() => { setEditingTx(tx); setShowForm(true); }}
+                    className="w-9 h-9 flex items-center justify-center text-gray-400 active:text-indigo-600 active:bg-indigo-50 rounded-xl transition-colors"
+                  >
+                    <Pencil size={15} />
+                  </button>
+                  <button
+                    onClick={() => handleDelete(tx.id)}
+                    className="w-9 h-9 flex items-center justify-center text-gray-400 active:text-red-600 active:bg-red-50 rounded-xl transition-colors"
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </div>
               </div>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
 

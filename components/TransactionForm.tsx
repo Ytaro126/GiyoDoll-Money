@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { CATEGORIES, Transaction, User } from '@/types';
+import { Transaction, User, TransactionType } from '@/types';
 import { useApp } from '@/lib/context';
 
 interface Props {
@@ -13,9 +13,16 @@ export default function TransactionForm({ initial, onDone }: Props) {
   const { data, addTx, updateTx, myUser } = useApp();
   const today = new Date().toISOString().split('T')[0];
 
+  const expCats = data.settings.expenseCategories;
+  const incCats = data.settings.incomeCategories;
+
+  const initType: TransactionType = initial?.type ?? 'expense';
+  const initCat = initial?.category ?? (initType === 'expense' ? expCats[0]?.name ?? '食費' : incCats[0]?.name ?? '給与');
+
   const [form, setForm] = useState({
+    type: initType,
     date: initial?.date ?? today,
-    category: initial?.category ?? CATEGORIES[0],
+    category: initCat,
     description: initial?.description ?? '',
     user: initial?.user ?? ((myUser ?? 'user1') as User),
     amount: initial?.amount?.toString() ?? '',
@@ -23,6 +30,15 @@ export default function TransactionForm({ initial, onDone }: Props) {
   const [error, setError] = useState('');
 
   const set = (k: string, v: string) => setForm((p) => ({ ...p, [k]: v }));
+
+  const handleTypeChange = (newType: TransactionType) => {
+    const cats = newType === 'expense' ? expCats : incCats;
+    setForm((p) => ({
+      ...p,
+      type: newType,
+      category: cats[0]?.name ?? (newType === 'expense' ? '食費' : '給与'),
+    }));
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -36,6 +52,7 @@ export default function TransactionForm({ initial, onDone }: Props) {
       return;
     }
     const tx = {
+      type: form.type as TransactionType,
       date: form.date,
       category: form.category,
       description: form.description,
@@ -52,10 +69,33 @@ export default function TransactionForm({ initial, onDone }: Props) {
 
   const userName1 = data.settings.user1Name;
   const userName2 = data.settings.user2Name;
+  const activeCategories = form.type === 'expense' ? expCats : incCats;
 
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
       {error && <p className="text-sm text-red-500 bg-red-50 px-3 py-2.5 rounded-lg">{error}</p>}
+
+      {/* 収入/支出トグル */}
+      <div className="flex bg-gray-100 rounded-xl p-1 gap-1">
+        <button
+          type="button"
+          onClick={() => handleTypeChange('expense')}
+          className={`flex-1 py-2.5 rounded-xl text-sm font-semibold transition-colors min-h-[44px] ${
+            form.type === 'expense' ? 'bg-red-500 text-white shadow-sm' : 'text-gray-500'
+          }`}
+        >
+          支出
+        </button>
+        <button
+          type="button"
+          onClick={() => handleTypeChange('income')}
+          className={`flex-1 py-2.5 rounded-xl text-sm font-semibold transition-colors min-h-[44px] ${
+            form.type === 'income' ? 'bg-green-500 text-white shadow-sm' : 'text-gray-500'
+          }`}
+        >
+          収入
+        </button>
+      </div>
 
       {/* 日付・金額 */}
       <div className="grid grid-cols-2 gap-3">
@@ -91,18 +131,19 @@ export default function TransactionForm({ initial, onDone }: Props) {
       <div>
         <label className="block text-xs font-medium text-gray-600 mb-2">カテゴリ</label>
         <div className="grid grid-cols-3 gap-2">
-          {CATEGORIES.map((cat) => (
+          {activeCategories.map((cat) => (
             <button
-              key={cat}
+              key={cat.name}
               type="button"
-              onClick={() => set('category', cat)}
+              onClick={() => set('category', cat.name)}
               className={`py-2.5 px-1 rounded-xl border text-xs font-medium transition-colors min-h-[44px] ${
-                form.category === cat
-                  ? 'bg-indigo-600 text-white border-indigo-600'
+                form.category === cat.name
+                  ? 'text-white border-transparent'
                   : 'border-gray-200 text-gray-600 active:bg-gray-100'
               }`}
+              style={form.category === cat.name ? { backgroundColor: cat.color, borderColor: cat.color } : {}}
             >
-              {cat}
+              {cat.name}
             </button>
           ))}
         </div>
@@ -111,8 +152,8 @@ export default function TransactionForm({ initial, onDone }: Props) {
       {/* 支払い者 */}
       <div>
         <label className="block text-xs font-medium text-gray-600 mb-2">支払い者</label>
-        <div className="grid grid-cols-2 gap-3">
-          {(['user1', 'user2'] as User[]).map((u) => (
+        <div className="grid grid-cols-3 gap-2">
+          {(['user1', 'user2', 'giyodoll'] as User[]).map((u) => (
             <button
               key={u}
               type="button"
@@ -123,7 +164,7 @@ export default function TransactionForm({ initial, onDone }: Props) {
                   : 'border-gray-200 text-gray-600 active:bg-gray-100'
               }`}
             >
-              {u === 'user1' ? userName1 : userName2}
+              {u === 'user1' ? userName1 : u === 'user2' ? userName2 : 'GiyoDoll'}
             </button>
           ))}
         </div>

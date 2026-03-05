@@ -1,17 +1,15 @@
 'use client';
 
 import { useState, useMemo } from 'react';
-import { PiggyBank, AlertTriangle, TrendingDown } from 'lucide-react';
+import { TrendingDown, TrendingUp, Wallet } from 'lucide-react';
 import { useApp } from '@/lib/context';
-import { formatCurrency } from '@/lib/storage';
+import { formatCurrency } from '@/lib/context';
 import { getMonthSummary, getYearSummary } from '@/lib/analytics';
-import BudgetBar from '@/components/BudgetBar';
-import { CATEGORIES } from '@/types';
 
 const MONTHS_JA = ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
 
 export default function BudgetPage() {
-  const { data, upsertBudgetEntry } = useApp();
+  const { data } = useApp();
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
@@ -20,43 +18,44 @@ export default function BudgetPage() {
   const currency = data.settings.currency;
 
   const monthSummary = useMemo(
-    () => getMonthSummary(data.transactions, data.budgets, year, month),
+    () => getMonthSummary(data.transactions, year, month, data.settings.expenseCategories),
     [data, year, month]
   );
   const yearSummary = useMemo(
-    () => getYearSummary(data.transactions, data.budgets, year),
+    () => getYearSummary(data.transactions, year, data.settings.expenseCategories),
     [data, year]
   );
 
   const years = Array.from({ length: 5 }, (_, i) => now.getFullYear() - 2 + i);
-
-  const getBudget = (y: number, m: number | null, cat: string | null) =>
-    data.budgets.find((b) => b.year === y && b.month === m && b.category === cat)?.amount ?? 0;
-
-  const handleBudgetChange = (value: string, cat: string | null, m: number | null) => {
-    const amount = parseFloat(value);
-    if (isNaN(amount) || amount < 0) return;
-    upsertBudgetEntry({ year, month: mode === 'month' ? m ?? month : null, category: cat, amount });
-  };
-
   const activeSummary = mode === 'month' ? monthSummary : yearSummary;
-  const activeMonthKey = mode === 'month' ? month : null;
 
-  // Category spent for current period
-  const getCategorySpent = (cat: string) => {
-    return (mode === 'month' ? monthSummary : yearSummary).byCategory.find(
-      (c) => c.category === cat
-    )?.amount ?? 0;
-  };
+  // 収入カテゴリ別集計
+  const incomeByCategory = useMemo(() => {
+    const incomeTx = data.transactions.filter((t) => {
+      if (t.type !== 'income') return false;
+      const d = new Date(t.date);
+      if (mode === 'month') {
+        return d.getFullYear() === year && d.getMonth() + 1 === month;
+      }
+      return d.getFullYear() === year;
+    });
+    const map = new Map<string, number>();
+    incomeTx.forEach((t) => {
+      map.set(t.category, (map.get(t.category) ?? 0) + t.amount);
+    });
+    return Array.from(map.entries())
+      .map(([category, amount]) => ({ category, amount }))
+      .sort((a, b) => b.amount - a.amount);
+  }, [data.transactions, year, month, mode]);
 
-  const totalBudget = getBudget(year, activeMonthKey, null);
+  const balance = activeSummary.incomeTotal - activeSummary.total;
 
   return (
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <h2 className="text-xl font-bold text-gray-900">予算管理</h2>
-        <p className="text-sm text-gray-400">月・年の予算を設定して進捗を確認</p>
+        <h2 className="text-xl font-bold text-gray-900">収支</h2>
+        <p className="text-sm text-gray-400">収入と支出の管理</p>
       </div>
 
       {/* Mode */}
@@ -67,7 +66,7 @@ export default function BudgetPage() {
             mode === 'month' ? 'bg-white text-indigo-700 shadow-sm' : 'text-gray-500'
           }`}
         >
-          月別予算
+          月別
         </button>
         <button
           onClick={() => setMode('year')}
@@ -75,7 +74,7 @@ export default function BudgetPage() {
             mode === 'year' ? 'bg-white text-indigo-700 shadow-sm' : 'text-gray-500'
           }`}
         >
-          年間予算
+          年間
         </button>
       </div>
 
@@ -101,128 +100,116 @@ export default function BudgetPage() {
         )}
       </div>
 
-      {/* Business plan style summary */}
-      <div className={`rounded-2xl p-5 shadow-sm border ${
-        activeSummary.deficit
-          ? 'bg-red-50 border-red-200'
-          : activeSummary.remaining !== null
-          ? 'bg-green-50 border-green-200'
-          : 'bg-white border-gray-100'
-      }`}>
-        <div className="flex items-center gap-2 mb-3">
-          {activeSummary.deficit ? (
-            <AlertTriangle size={18} className="text-red-500" />
+      {/* Summary Cards */}
+      <div className="grid grid-cols-3 gap-3">
+        {/* 収入 */}
+        <div className="bg-green-50 rounded-2xl p-4 border border-green-100">
+          <div className="flex items-center gap-1 text-green-600 text-xs mb-2">
+            <TrendingUp size={13} />
+            収入
+          </div>
+          <p className="text-base font-bold text-green-700 leading-tight">
+            {formatCurrency(activeSummary.incomeTotal, currency)}
+          </p>
+        </div>
+
+        {/* 支出 */}
+        <div className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
+          <div className="flex items-center gap-1 text-gray-400 text-xs mb-2">
+            <TrendingDown size={13} />
+            支出
+          </div>
+          <p className="text-base font-bold text-gray-900 leading-tight">
+            {formatCurrency(activeSummary.total, currency)}
+          </p>
+        </div>
+
+        {/* 残高 */}
+        <div className={`rounded-2xl p-4 border ${
+          activeSummary.incomeTotal === 0
+            ? 'bg-gray-50 border-gray-100'
+            : balance < 0
+            ? 'bg-red-50 border-red-100'
+            : 'bg-blue-50 border-blue-100'
+        }`}>
+          <div className="flex items-center gap-1 text-xs mb-2 text-gray-400">
+            <Wallet size={13} />
+            残高
+          </div>
+          {activeSummary.incomeTotal === 0 ? (
+            <p className="text-xs text-gray-400">---</p>
           ) : (
-            <PiggyBank size={18} className="text-indigo-500" />
+            <p className={`text-base font-bold leading-tight ${balance < 0 ? 'text-red-600' : 'text-blue-700'}`}>
+              {balance < 0 ? '-' : ''}{formatCurrency(Math.abs(balance), currency)}
+            </p>
           )}
-          <h3 className="text-sm font-semibold text-gray-700">
-            {mode === 'month' ? `${year}年${month}月` : `${year}年`} 予算サマリー
-          </h3>
         </div>
+      </div>
 
-        {totalBudget > 0 ? (
+      {/* 支出カテゴリ別内訳 */}
+      {activeSummary.byCategory.length > 0 && (
+        <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+          <h3 className="text-sm font-semibold text-gray-700 mb-4">支出カテゴリ別内訳</h3>
           <div className="space-y-3">
-            <div className="grid grid-cols-3 gap-2 text-center">
-              <div className="bg-white/70 rounded-xl p-3">
-                <p className="text-xs text-gray-500 mb-1">予算</p>
-                <p className="text-sm font-bold text-gray-900 leading-tight">
-                  {formatCurrency(totalBudget, currency)}
-                </p>
-              </div>
-              <div className="bg-white/70 rounded-xl p-3">
-                <p className="text-xs text-gray-500 mb-1">支出</p>
-                <p className="text-sm font-bold text-gray-900 leading-tight">
-                  {formatCurrency(activeSummary.total, currency)}
-                </p>
-              </div>
-              <div className={`rounded-xl p-3 ${
-                activeSummary.deficit ? 'bg-red-100' : 'bg-green-100'
-              }`}>
-                <p className="text-xs text-gray-500 mb-1">
-                  {activeSummary.deficit ? '赤字' : '残り'}
-                </p>
-                <p className={`text-sm font-bold leading-tight ${
-                  activeSummary.deficit ? 'text-red-600' : 'text-green-700'
-                }`}>
-                  {activeSummary.deficit
-                    ? `-${formatCurrency(activeSummary.deficit, currency)}`
-                    : formatCurrency(activeSummary.remaining!, currency)}
-                </p>
-              </div>
-            </div>
-            <BudgetBar
-              label="合計"
-              budget={totalBudget}
-              spent={activeSummary.total}
-              currency={currency}
-            />
-            {activeSummary.deficit && (
-              <div className="flex items-center gap-2 text-sm text-red-600 bg-red-100 rounded-lg px-3 py-2">
-                <TrendingDown size={16} />
-                <span>予算を <strong>{formatCurrency(activeSummary.deficit, currency)}</strong> オーバーしています</span>
-              </div>
-            )}
-          </div>
-        ) : (
-          <p className="text-sm text-gray-500">下記で予算を設定してください</p>
-        )}
-      </div>
-
-      {/* Total budget input */}
-      <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
-        <h3 className="text-sm font-semibold text-gray-700 mb-4">合計予算を設定</h3>
-        <div className="flex items-center gap-3">
-          <span className="text-gray-500 text-sm flex-shrink-0">合計予算</span>
-          <div className="relative flex-1">
-            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">¥</span>
-            <input
-              type="number"
-              min="0"
-              defaultValue={totalBudget || ''}
-              placeholder="0"
-              key={`total-${year}-${month}-${mode}`}
-              onBlur={(e) => handleBudgetChange(e.target.value, null, null)}
-              className="w-full border border-gray-200 rounded-lg pl-7 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
-            />
-          </div>
-        </div>
-      </div>
-
-      {/* Category budgets */}
-      <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
-        <h3 className="text-sm font-semibold text-gray-700 mb-4">カテゴリ別予算</h3>
-        <div className="space-y-4">
-          {CATEGORIES.map((cat) => {
-            const budget = getBudget(year, activeMonthKey, cat);
-            const spent = getCategorySpent(cat);
-            return (
-              <div key={cat}>
-                <div className="flex items-center gap-3 mb-2">
-                  <span className="text-sm text-gray-700 w-16 flex-shrink-0">{cat}</span>
-                  <div className="relative flex-1">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">¥</span>
-                    <input
-                      type="number"
-                      min="0"
-                      defaultValue={budget || ''}
-                      placeholder="設定なし"
-                      key={`${cat}-${year}-${month}-${mode}`}
-                      onBlur={(e) => handleBudgetChange(e.target.value, cat, null)}
-                      className="w-full border border-gray-200 rounded-lg pl-7 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
-                    />
-                  </div>
-                  <span className="text-xs text-gray-500 w-20 text-right flex-shrink-0">
-                    使用: {formatCurrency(spent, currency)}
+            {activeSummary.byCategory.map(({ category, amount, percentage, color }) => (
+              <div key={category}>
+                <div className="flex justify-between items-center mb-1">
+                  <span className="text-sm text-gray-700">{category}</span>
+                  <span className="text-sm font-medium text-gray-900">
+                    {formatCurrency(amount, currency)}
+                    <span className="text-xs text-gray-400 ml-1">({percentage}%)</span>
                   </span>
                 </div>
-                {budget > 0 && (
-                  <BudgetBar label="" budget={budget} spent={spent} currency={currency} />
-                )}
+                <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                  <div
+                    className="h-full rounded-full"
+                    style={{ width: `${percentage}%`, backgroundColor: color }}
+                  />
+                </div>
               </div>
-            );
-          })}
+            ))}
+          </div>
         </div>
-      </div>
+      )}
+
+      {/* 収入カテゴリ別内訳 */}
+      {incomeByCategory.length > 0 && (
+        <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+          <h3 className="text-sm font-semibold text-gray-700 mb-4">収入カテゴリ別内訳</h3>
+          <div className="space-y-3">
+            {incomeByCategory.map(({ category, amount }) => {
+              const cat = data.settings.incomeCategories.find((c) => c.name === category);
+              const color = cat?.color ?? '#4CAF50';
+              const pct = activeSummary.incomeTotal > 0
+                ? Math.round((amount / activeSummary.incomeTotal) * 1000) / 10
+                : 0;
+              return (
+                <div key={category}>
+                  <div className="flex justify-between items-center mb-1">
+                    <span className="text-sm text-gray-700">{category}</span>
+                    <span className="text-sm font-medium text-gray-900">
+                      {formatCurrency(amount, currency)}
+                      <span className="text-xs text-gray-400 ml-1">({pct}%)</span>
+                    </span>
+                  </div>
+                  <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                    <div
+                      className="h-full rounded-full"
+                      style={{ width: `${pct}%`, backgroundColor: color }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {activeSummary.total === 0 && activeSummary.incomeTotal === 0 && (
+        <div className="bg-white rounded-2xl p-12 text-center shadow-sm border border-gray-100">
+          <p className="text-gray-400 text-sm">この期間のデータがありません</p>
+        </div>
+      )}
     </div>
   );
 }

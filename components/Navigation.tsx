@@ -2,13 +2,13 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutDashboard, List, BarChart2, PiggyBank, Settings } from 'lucide-react';
+import { LayoutDashboard, List, BarChart2, ArrowLeftRight, Settings } from 'lucide-react';
 
 const NAV_ITEMS = [
   { href: '/', label: 'ホーム', icon: LayoutDashboard },
   { href: '/transactions', label: '取引', icon: List },
   { href: '/analytics', label: '分析', icon: BarChart2 },
-  { href: '/budget', label: '予算', icon: PiggyBank },
+  { href: '/budget', label: '収支', icon: ArrowLeftRight },
   { href: '/settings', label: '設定', icon: Settings },
 ];
 
@@ -20,7 +20,7 @@ export default function Navigation() {
       {/* Desktop sidebar */}
       <aside className="hidden md:flex flex-col w-56 min-h-screen bg-white border-r border-gray-100 fixed left-0 top-0 z-30 shadow-sm">
         <div className="px-6 py-5 border-b border-gray-100">
-          <h1 className="text-lg font-bold text-indigo-600">Giyodoll Money</h1>
+          <h1 className="text-lg font-bold text-indigo-600">GiyoDoll Money</h1>
           <p className="text-xs text-gray-400 mt-0.5">ふたりの家計管理</p>
         </div>
         <nav className="flex-1 px-3 py-4 space-y-1">
